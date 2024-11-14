@@ -38,7 +38,7 @@ Node.js, Express.js, JavaScript, HTML, CSS
 
 ## Demo
 
-Insert gif or link to demo
+[Video demo](https://www.youtube.com/watch?v=ct2Gtpe33hc)
 
 
 ## Authors

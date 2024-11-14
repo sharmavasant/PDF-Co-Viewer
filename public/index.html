@@ -1,0 +1,366 @@
+<!-- public/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PDF Co-Viewer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.3.2/socket.io.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>PDF Co-Viewer</title>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.3.2/socket.io.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #f0f0f0;
+          }
+
+          #controls {
+            margin: 20px 0;
+            padding: 10px;
+            background: #e0e0e0;
+            border-radius: 5px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+          }
+
+          #pageNum {
+            width: 50px;
+            text-align: center;
+            padding: 5px;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+          }
+
+          #canvas {
+            border: 1px solid #ddd;
+            margin: 20px 0;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+          }
+
+          .button {
+            padding: 8px 15px;
+            border: none;
+            background: #3498db; /* Adjust button color here */
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.2s ease-in-out;
+          }
+
+          .button:hover {
+            background-color: #2980b9; /* Adjust button hover color here */
+          }
+
+          .button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+          }
+
+          #status {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            padding: 10px;
+            background: #e0e0e0;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+          }
+
+          #loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 20px;
+            border-radius: 5px;
+            display: none;
+          }
+        </style>
+      </head>
+      <body>
+        <div id="loading">Loading PDF...</div>
+
+        <div id="join-form">
+          <h1>COLLABORATIVE PDF READER</h1>
+          <input type="text" id="roomId" placeholder="Enter Room ID" />
+          <button class="button" onclick="joinRoom(true)">Create Room</button>
+          <button class="button" onclick="joinRoom(false)">Join Room</button>
+        </div>
+
+        <div id="viewer" style="display: none">
+          <h1>COLLABORATIVE PDF READER</h1>
+          <div id="controls">
+            <button id="prev" class="button">Previous</button>
+            <span
+              >Page: <input type="number" id="pageNum" min="1" /> /
+              <span id="pageCount"></span>
+            </span>
+            <button id="next" class="button">Next</button>
+            <input type="file" id="fileInput" accept="application/pdf" />
+          </div>
+          <canvas id="canvas"></canvas>
+        </div>
+
+        <div id="status"></div>
+
+        <div
+          id="footer"
+          style="
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            background-color: #e0e0e0;
+            text-align: center;
+            padding: 10px;
+            box-shadow: 0 -2px 4px rgba(0, 0, 0, 0.1);
+            font-size: 14px;
+            color: #333;
+          "
+        >
+          Copyright ©️ 2024 VASANT KUMAR SHARMA All rights reserved
+        </div>
+
+        <script>
+          pdfjsLib.GlobalWorkerOptions.workerSrc =
+            "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.worker.min.js";
+
+          let pdfDoc = null;
+          let pageNum = 1;
+          let socket = io();
+          let isAdmin = false;
+          let currentRoom = null;
+          let loadingElement = document.getElementById("loading");
+
+          function updateRoleBadge() {
+            const roleBadge = document.getElementById("roleBadge");
+            roleBadge.textContent = isAdmin ? "Admin" : "Viewer";
+            roleBadge.className = isAdmin ? "admin-badge" : "viewer-badge";
+          }
+
+          async function joinRoom(asAdmin) {
+            const roomId = document.getElementById("roomId").value;
+            if (!roomId) {
+              alert("Please enter a room ID");
+              return;
+            }
+
+            isAdmin = asAdmin;
+            currentRoom = roomId;
+
+            document.getElementById("join-form").style.display = "none";
+            document.getElementById("viewer").style.display = "block";
+            document.getElementById("fileInput").style.display = isAdmin
+              ? "block"
+              : "none";
+
+            document.getElementById("status").style.display = "block";
+
+            socket.emit("joinRoom", { roomId, isAdmin });
+          }
+
+          // Socket events
+          socket.on("pageSync", async ({ page, pdfData }) => {
+            if (page) pageNum = page;
+            if (pdfData && !pdfDoc) {
+              await loadPDFFromData(pdfData);
+            }
+            renderPage();
+          });
+
+          socket.on("pdfSync", async ({ pdfData }) => {
+            await loadPDFFromData(pdfData);
+          });
+
+          socket.on("userCount", ({ count }) => {
+            document.getElementById("status").textContent = `${count} user${
+              count !== 1 ? "s" : ""
+            } connected`;
+          });
+
+          socket.on("adminChange", ({ newAdminId }) => {
+            if (socket.id === newAdminId) {
+              isAdmin = true;
+              document.getElementById("fileInput").style.display = "block";
+              alert("You are now the presenter");
+            }
+          });
+
+          // PDF handling
+          async function loadPDF(file) {
+            loadingElement.style.display = "block";
+            try {
+              const arrayBuffer = await file.arrayBuffer();
+              // Convert ArrayBuffer to base64
+              const base64 = btoa(
+                new Uint8Array(arrayBuffer).reduce(
+                  (data, byte) => data + String.fromCharCode(byte),
+                  ""
+                )
+              );
+
+              // Send to server
+              socket.emit("pdfUpload", {
+                roomId: currentRoom,
+                pdfData: base64,
+              });
+
+              await loadPDFFromData(base64);
+            } catch (error) {
+              console.error("Error loading PDF:", error);
+              alert("Error loading PDF");
+            }
+            loadingElement.style.display = "none";
+          }
+
+          async function loadPDFFromData(base64Data) {
+            loadingElement.style.display = "block";
+            try {
+              const binaryString = atob(base64Data);
+              const bytes = new Uint8Array(binaryString.length);
+              for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+              }
+
+              pdfDoc = await pdfjsLib.getDocument({ data: bytes }).promise;
+              document.getElementById("pageCount").textContent =
+                pdfDoc.numPages;
+              renderPage();
+            } catch (error) {
+              console.error("Error loading PDF from data:", error);
+              alert("Error loading PDF");
+            }
+            loadingElement.style.display = "none";
+          }
+
+          // async function renderPage() {
+          //   if (!pdfDoc) return;
+
+          //   loadingElement.style.display = "block";
+          //   try {
+          //     const page = await pdfDoc.getPage(pageNum);
+          //     const canvas = document.getElementById("canvas");
+          //     const ctx = canvas.getContext("2d");
+
+          //     const viewport = page.getViewport({ scale: 1.5 });
+          //     canvas.height = viewport.height;
+          //     canvas.width = viewport.width;
+
+          //     await page.render({
+          //       canvasContext: ctx,
+          //       viewport: viewport,
+          //     }).promise;
+
+          //     document.getElementById("pageNum").value = pageNum;
+
+          //     if (isAdmin) {
+          //       socket.emit("changePage", {
+          //         roomId: currentRoom,
+          //         page: pageNum,
+          //       });
+          //     }
+          //   } catch (error) {
+          //     console.error("Error rendering page:", error);
+          //     alert("Error rendering page");
+          //   }
+          //   loadingElement.style.display = "none";
+          // }
+
+          let renderTask = null; // Track the current render task
+
+          async function renderPage() {
+            if (!pdfDoc) return;
+
+            // Cancel any ongoing render task before starting a new one
+            if (renderTask) {
+              renderTask.cancel();
+            }
+
+            loadingElement.style.display = "block";
+            try {
+              const page = await pdfDoc.getPage(pageNum);
+              const canvas = document.getElementById("canvas");
+              const ctx = canvas.getContext("2d");
+
+              const viewport = page.getViewport({ scale: 1.5 });
+              canvas.height = viewport.height;
+              canvas.width = viewport.width;
+
+              // Start the new render task and store it
+              renderTask = page.render({
+                canvasContext: ctx,
+                viewport: viewport,
+              });
+
+              await renderTask.promise; // Wait for the render to complete
+              renderTask = null; // Clear the render task after completion
+
+              document.getElementById("pageNum").value = pageNum;
+
+              if (isAdmin) {
+                socket.emit("changePage", {
+                  roomId: currentRoom,
+                  page: pageNum,
+                });
+              }
+            } catch (error) {
+              if (error.name === "RenderingCancelledException") {
+                console.log("Rendering cancelled for new render.");
+              } else {
+                console.error("Error rendering page:", error);
+                alert("Error rendering page");
+              }
+            }
+            loadingElement.style.display = "none";
+          }
+
+          // Event listeners
+          document.getElementById("prev").addEventListener("click", () => {
+            if (pageNum <= 1 || !isAdmin) return;
+            pageNum--;
+            renderPage();
+          });
+
+          document.getElementById("next").addEventListener("click", () => {
+            if (!pdfDoc || pageNum >= pdfDoc.numPages || !isAdmin) return;
+            pageNum++;
+            renderPage();
+          });
+
+          document.getElementById("pageNum").addEventListener("change", (e) => {
+            if (!isAdmin) return;
+            const newPage = parseInt(e.target.value);
+            if (newPage >= 1 && newPage <= pdfDoc.numPages) {
+              pageNum = newPage;
+              renderPage();
+            }
+          });
+
+          document
+            .getElementById("fileInput")
+            .addEventListener("change", (e) => {
+              if (e.target.files[0]) {
+                loadPDF(e.target.files[0]);
+              }
+            });
+        </script>
+      </body>
+    </html>
+  </head>
+</html>
